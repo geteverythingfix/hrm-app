@@ -1,0 +1,369 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Database-level CHECK, exclusion, partial-index, and RLS rules live in the SQL migration.
+model tenants {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug       String   @unique
+  name       String
+  status     String   @default("active")
+  time_zone  String   @default("UTC")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  teams                    teams[]
+  users                    users[]
+  roles                    roles[]
+  role_permissions         role_permissions[]
+  user_roles               user_roles[]
+  sessions                 sessions[]
+  login_invitations        login_invitations[]
+  work_schedules           work_schedules[]
+  holidays                 holidays[]
+  devices                  devices[]
+  device_user_mappings     device_user_mappings[]
+  attendance_logs          attendance_logs[]
+  attendance_ingest_errors attendance_ingest_errors[]
+  attendance_days          attendance_days[]
+  attendance_adjustments   attendance_adjustments[]
+  audit_events             audit_events[]
+}
+
+model auth_accounts {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email_normalized  String    @unique
+  password_hash     String?
+  email_verified_at DateTime? @db.Timestamptz(6)
+  status            String    @default("active")
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  users    users[]
+  sessions sessions[]
+}
+
+model teams {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id  String   @db.Uuid
+  name       String
+  status     String   @default("active")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users  users[]
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, name])
+}
+
+model users {
+  id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                String    @db.Uuid
+  auth_account_id          String?   @db.Uuid
+  origin_attendance_log_id String?   @db.Uuid
+  staff_number             String?
+  display_name             String?
+  work_email               String?
+  status                   String    @default("provisional")
+  employment_status        String?
+  supervisor_user_id       String?   @db.Uuid
+  team_id                  String?   @db.Uuid
+  hire_date                DateTime? @db.Date
+  ended_on                 DateTime? @db.Date
+  created_at               DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant                tenants          @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  auth_account          auth_accounts?   @relation(fields: [auth_account_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  origin_attendance_log attendance_logs? @relation("origin_log", fields: [tenant_id, origin_attendance_log_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  supervisor            users?           @relation("supervisor", fields: [tenant_id, supervisor_user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  direct_reports        users[]          @relation("supervisor")
+  team                  teams?           @relation(fields: [tenant_id, team_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  sessions              sessions[]
+  login_invitations     login_invitations[]
+  user_roles            user_roles[]
+  work_schedules        work_schedules[]
+  device_user_mappings  device_user_mappings[]
+  attendance_logs       attendance_logs[] @relation("linked_logs")
+  attendance_days       attendance_days[]
+  adjustments           attendance_adjustments[] @relation("adjusted_user")
+  adjustments_authored  attendance_adjustments[] @relation("adjustment_actor")
+  audit_events          audit_events[]
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, staff_number])
+  @@unique([tenant_id, auth_account_id])
+  @@unique([tenant_id, origin_attendance_log_id])
+}
+
+model permissions {
+  key            String   @id
+  description    String
+  allowed_scopes String[]
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  role_permissions role_permissions[]
+}
+
+model roles {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id          String   @db.Uuid
+  name               String
+  is_system_template Boolean  @default(false)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant           tenants            @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  role_permissions role_permissions[]
+  user_roles       user_roles[]
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, name])
+}
+
+model role_permissions {
+  tenant_id      String   @db.Uuid
+  role_id        String   @db.Uuid
+  permission_key String
+  scope          String
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant     tenants     @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  role       roles       @relation(fields: [tenant_id, role_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  permission permissions @relation(fields: [permission_key], references: [key], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([tenant_id, role_id, permission_key, scope])
+}
+
+model user_roles {
+  tenant_id  String   @db.Uuid
+  user_id    String   @db.Uuid
+  role_id    String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user   users   @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  role   roles   @relation(fields: [tenant_id, role_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([tenant_id, user_id, role_id])
+}
+
+model sessions {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id       String    @db.Uuid
+  user_id         String    @db.Uuid
+  auth_account_id String    @db.Uuid
+  token_hash      String    @unique
+  expires_at      DateTime  @db.Timestamptz(6)
+  revoked_at      DateTime? @db.Timestamptz(6)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+
+  tenant       tenants       @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user         users         @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  auth_account auth_accounts @relation(fields: [auth_account_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+}
+
+model login_invitations {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id        String    @db.Uuid
+  user_id          String    @db.Uuid
+  email_normalized String
+  token_hash       String    @unique
+  expires_at       DateTime  @db.Timestamptz(6)
+  accepted_at      DateTime? @db.Timestamptz(6)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user   users   @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+}
+
+model work_schedules {
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                 String    @db.Uuid
+  user_id                   String    @db.Uuid
+  day_of_week               Int
+  start_local_time          DateTime  @db.Time(0)
+  grace_minutes             Int       @default(0)
+  absence_cutoff_local_time DateTime  @db.Time(0)
+  effective_from            DateTime  @db.Date
+  effective_to              DateTime? @db.Date
+  created_at                DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant          tenants           @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user            users             @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  attendance_days attendance_days[]
+
+  @@unique([tenant_id, id])
+}
+
+model holidays {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id    String   @db.Uuid
+  holiday_date DateTime @db.Date
+  name         String
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, holiday_date])
+}
+
+model devices {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id     String    @db.Uuid
+  serial_number String
+  secret_hash   String?
+  name          String?
+  time_zone     String?
+  status        String    @default("pending")
+  last_seen_at  DateTime? @db.Timestamptz(6)
+  claimed_at    DateTime? @db.Timestamptz(6)
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant                   tenants                    @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  device_user_mappings     device_user_mappings[]
+  attendance_logs          attendance_logs[]
+  attendance_ingest_errors attendance_ingest_errors[]
+
+  @@unique([tenant_id, id])
+}
+
+model device_user_mappings {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id      String    @db.Uuid
+  device_id      String    @db.Uuid
+  device_user_id String
+  user_id        String    @db.Uuid
+  effective_from DateTime  @default(now()) @db.Timestamptz(6)
+  effective_to   DateTime? @db.Timestamptz(6)
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  device devices @relation(fields: [tenant_id, device_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  user   users   @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+  @@index([tenant_id, device_id, device_user_id, effective_from], map: "device_user_mappings_lookup_idx")
+}
+
+model attendance_logs {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id         String    @db.Uuid
+  device_id         String    @db.Uuid
+  device_user_id    String
+  user_id           String?   @db.Uuid
+  occurred_local    DateTime  @db.Timestamp(0)
+  device_time_zone  String?
+  occurred_at_utc   DateTime? @db.Timestamptz(6)
+  received_at       DateTime  @default(now()) @db.Timestamptz(6)
+  status_code       String?
+  verify_mode       String?
+  work_code         String?
+  raw_line          String?
+  event_key         String
+
+  tenant               tenants           @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  device               devices           @relation(fields: [tenant_id, device_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  user                 users?            @relation("linked_logs", fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  originating_user     users?            @relation("origin_log")
+  first_attendance_day attendance_days[]
+
+  @@unique([tenant_id, id])
+  @@unique([device_id, event_key])
+  @@index([tenant_id, device_id, device_user_id, occurred_at_utc], map: "attendance_logs_device_pin_time_idx")
+  @@index([tenant_id, user_id, occurred_at_utc], map: "attendance_logs_user_time_idx")
+}
+
+model attendance_ingest_errors {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id      String   @db.Uuid
+  device_id      String?  @db.Uuid
+  received_at    DateTime @default(now()) @db.Timestamptz(6)
+  reason_code    String
+  record_excerpt String?
+
+  tenant tenants  @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  device devices? @relation(fields: [tenant_id, device_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+}
+
+model attendance_days {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id             String    @db.Uuid
+  user_id               String    @db.Uuid
+  local_date            DateTime  @db.Date
+  schedule_id           String?   @db.Uuid
+  first_log_id          String?   @db.Uuid
+  first_clock_in_at     DateTime? @db.Timestamptz(6)
+  effective_clock_in_at DateTime? @db.Timestamptz(6)
+  computed_status       String
+  effective_status      String
+  computed_at           DateTime  @default(now()) @db.Timestamptz(6)
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant    tenants         @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user      users           @relation(fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  schedule  work_schedules? @relation(fields: [tenant_id, schedule_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  first_log attendance_logs? @relation(fields: [tenant_id, first_log_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, user_id, local_date])
+  @@index([tenant_id, local_date, effective_status], map: "attendance_days_status_idx")
+}
+
+model attendance_adjustments {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id       String    @db.Uuid
+  user_id         String    @db.Uuid
+  local_date      DateTime  @db.Date
+  kind            String
+  new_status      String?
+  new_clock_in_at DateTime? @db.Timestamptz(6)
+  reason          String
+  actor_user_id   String    @db.Uuid
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  supersedes_id   String?   @db.Uuid
+
+  tenant      tenants                 @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user        users                   @relation("adjusted_user", fields: [tenant_id, user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  actor       users                   @relation("adjustment_actor", fields: [tenant_id, actor_user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  supersedes  attendance_adjustments? @relation("adjustment_chain", fields: [tenant_id, supersedes_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+  superseded_by attendance_adjustments? @relation("adjustment_chain")
+
+  @@unique([tenant_id, id])
+  @@unique([tenant_id, supersedes_id])
+  @@index([tenant_id, user_id, local_date, created_at], map: "attendance_adjustments_history_idx")
+}
+
+model audit_events {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id     String   @db.Uuid
+  actor_user_id String?  @db.Uuid
+  action        String
+  target_type   String
+  target_id     String   @db.Uuid
+  occurred_at   DateTime @default(now()) @db.Timestamptz(6)
+  metadata      Json     @default("{}") @db.JsonB
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actor  users?  @relation(fields: [tenant_id, actor_user_id], references: [tenant_id, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenant_id, id])
+  @@index([tenant_id, occurred_at], map: "audit_events_tenant_time_idx")
+}

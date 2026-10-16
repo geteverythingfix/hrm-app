@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+.local/
+node_modules/
+.nuxt/
+.output/
+src/generated/prisma/
+
